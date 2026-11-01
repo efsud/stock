@@ -1,0 +1,31 @@
+{
+  "watchlist": ["XEG.TO", "ZEO.TO", "BTC-CAD", "XEQT.TO", "VFV.TO", "SPPP.TO", "FINN.NE", "PHYS.TO", "ZNQ.TO", "NVDA", "PSLV.TO", "MU.TO", "COPP.TO", "ZGD.TO", "SSPM.TP", "AMD.TO"],
+  "unresolved": {"SSPM.TP": "Please confirm the investment name and exchange; no substitute has been made."},
+  "discovery": ["RY.TO", "TD.TO", "ENB.TO", "CNQ.TO", "CNR.TO", "CSU.TO", "SHOP.TO", "AAPL", "MSFT", "GOOGL", "AMZN", "META", "AVGO", "COST", "JPM"],
+  "holdings": ["XEG.TO", "ZEO.TO", "BTC-CAD", "XEQT.TO", "VFV.TO", "SPPP.TO", "FINN.NE", "PHYS.TO", "ZNQ.TO", "NVDA", "PSLV.TO", "MU.TO", "COPP.TO", "ZGD.TO", "SSPM.TP", "AMD.TO"],
+  "benchmark": "XEQT.TO",
+  "poll_seconds": 900,
+  "news_enabled": true,
+  "max_equity_age_days": 4,
+  "max_crypto_age_days": 2,
+  "max_buy_atr_pct": 6,
+  "unusual_move_pct": 5,
+  "unusual_volume_ratio": 2.5,
+  "risk_notes": {
+    "XEG.TO": "Energy-sector concentration; oil/gas prices, policy and cyclical demand.",
+    "ZEO.TO": "Energy-sector concentration; likely overlaps other energy exposure.",
+    "BTC-CAD": "Very high volatility; 24/7 trading, custody and regulatory risks; no cash-flow valuation.",
+    "XEQT.TO": "All-equity portfolio; global equity drawdowns and currency exposure; no bond cushion.",
+    "VFV.TO": "US large-cap concentration and CAD/USD currency exposure; overlaps global/technology funds.",
+    "SPPP.TO": "Platinum/palladium prices, industrial demand, liquidity and trust premium/discount to NAV.",
+    "FINN.NE": "Actively managed innovation exposure; growth valuation, manager and concentration risks.",
+    "PHYS.TO": "Gold prices, real interest rates, currency and trust premium/discount to NAV.",
+    "ZNQ.TO": "Nasdaq equity concentration, technology valuations and currency exposure.",
+    "NVDA": "Single-company and semiconductor-cycle risks; earnings, export restrictions and valuation; USD quote.",
+    "PSLV.TO": "Silver prices, industrial demand, liquidity and trust premium/discount to NAV.",
+    "MU.TO": "Micron CDR: memory cycle, earnings and CDR hedging/fees; not the US share price.",
+    "COPP.TO": "Verify fund mandate; copper-related exposure is sensitive to industrial demand and commodity cycles.",
+    "ZGD.TO": "Gold-mining equities: operating costs, political risk and equity drawdowns as well as gold prices.",
+    "AMD.TO": "AMD Canadian listing: confirm instrument; semiconductor competition, earnings and CDR structure."
+  }
+}
