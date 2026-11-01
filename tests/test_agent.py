@@ -6,7 +6,7 @@ import unittest
 from unittest.mock import patch
 from datetime import datetime, timedelta, timezone
 
-from stock_agent.app import AlertState, analyse, choose_destination, closed_bar, deliver, parse_headlines, rsi
+from stock_agent.app import AlertState, analyse, choose_destination, closed_bar, daily_due, daily_summary, deliver, deliver_daily, parse_headlines, rsi
 
 NOW = datetime(2026, 11, 1, 23, tzinfo=timezone.utc)
 CONFIG = json.loads((Path(__file__).resolve().parents[1] / 'config.json').read_text())
@@ -35,6 +35,62 @@ class SetupTests(unittest.TestCase):
         with patch('stock_agent.app.request_json', return_value={'ok': True, 'result': []}), \
              patch('builtins.input', side_effect=['', 'my_bot', '-12345']), patch('builtins.print'):
             self.assertEqual(choose_destination('test-token', 'test_bot'), '-12345')
+
+
+class DailySummaryTests(unittest.TestCase):
+    def row(self, symbol, signal, horizon='SWING', owned=True):
+        return {'symbol': symbol, 'signal': signal, 'horizon': horizon, 'owned': owned}
+
+    def test_no_action_is_one_short_sentence(self):
+        self.assertEqual(daily_summary([self.row('A', 'WAIT')], {}), 'No buys or sells recommended.')
+
+    def test_action_summary_omits_status_and_unowned_sells(self):
+        text = daily_summary([self.row('A', 'BUY_CANDIDATE'), self.row('B', 'EXIT_REVIEW'),
+                              self.row('C', 'WAIT'), self.row('D', 'EXIT_REVIEW', owned=False),
+                              self.row('E', 'BUY_CANDIDATE', 'LONG_TERM')], {})
+        self.assertEqual(text, 'Daily-price signals\nSwing: Buy A; Sell B.\nLong-term: Buy E.')
+
+    def test_conflicts_never_recommend_buy_and_sell_same_symbol(self):
+        text = daily_summary([self.row('A', 'BUY_CANDIDATE'), self.row('A', 'EXIT_REVIEW', 'LONG_TERM')], {})
+        self.assertNotIn('Buy A', text)
+        self.assertNotIn('Sell A', text)
+        self.assertIn('Mixed signals: A.', text)
+
+    def test_missing_data_is_not_a_no_action_recommendation(self):
+        text = daily_summary([self.row('A', 'DATA_STALE')], {'A': 'stale'})
+        self.assertIn('Analysis unavailable', text)
+
+    def test_noon_delivery_deduplicates_restarts_and_retries_failures(self):
+        with tempfile.TemporaryDirectory() as folder:
+            path = Path(folder)/'state.db'
+            state = AlertState(path)
+            report = {'results': [self.row('A', 'WAIT')], 'errors': {}}
+            before = datetime(2026, 11, 2, 16, 59, tzinfo=timezone.utc)
+            noon = datetime(2026, 11, 2, 17, 0, tzinfo=timezone.utc)
+            sent = []
+            self.assertFalse(deliver_daily(report, CONFIG, state, before, sent.append))
+            def fail(_):
+                raise RuntimeError('offline')
+            with self.assertRaises(RuntimeError):
+                deliver_daily(report, CONFIG, state, noon, fail)
+            self.assertTrue(deliver_daily(report, CONFIG, state, noon, sent.append))
+            state.db.close()
+            state = AlertState(path)
+            self.assertFalse(deliver_daily(report, CONFIG, state, noon, sent.append))
+            tomorrow = noon + timedelta(days=1)
+            self.assertTrue(deliver_daily(report, CONFIG, state, tomorrow, sent.append))
+            self.assertEqual(len(sent), 2)
+            state.db.close()
+
+    def test_noon_stays_local_across_daylight_saving(self):
+        with tempfile.TemporaryDirectory() as folder:
+            state = AlertState(Path(folder)/'state.db')
+            summer = datetime(2026, 10, 30, 16, 0, tzinfo=timezone.utc)
+            winter = datetime(2026, 11, 2, 17, 0, tzinfo=timezone.utc)
+            self.assertTrue(daily_due(CONFIG, state, summer)[0])
+            self.assertTrue(daily_due(CONFIG, state, winter)[0])
+            self.assertFalse(daily_due(CONFIG, state, winter+timedelta(hours=1))[0])
+            state.db.close()
 
 
 class AnalysisTests(unittest.TestCase):

@@ -5,6 +5,7 @@
   "holdings": ["XEG.TO", "ZEO.TO", "BTC-CAD", "XEQT.TO", "VFV.TO", "SPPP.TO", "FINN.NE", "PHYS.TO", "ZNQ.TO", "NVDA", "PSLV.TO", "MU.TO", "COPP.TO", "ZGD.TO", "SSPM.TP", "AMD.TO"],
   "benchmark": "XEQT.TO",
   "poll_seconds": 900,
+  "daily_notification": {"timezone": "America/Toronto", "hour": 12, "minute": 0, "window_minutes": 60},
   "news_enabled": true,
   "max_equity_age_days": 4,
   "max_crypto_age_days": 2,

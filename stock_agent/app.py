@@ -304,6 +304,60 @@ def deliver(rows, errors, state, send=telegram, news=None):
             state.mark(key)
 
 
+def daily_due(config, state, now):
+    schedule = config["daily_notification"]
+    local = now.astimezone(ZoneInfo(schedule["timezone"]))
+    target = local.replace(hour=schedule["hour"], minute=schedule["minute"], second=0, microsecond=0)
+    key = f"daily-summary:{local.date().isoformat()}"
+    due = target <= local < target + timedelta(minutes=schedule["window_minutes"])
+    return due and not state.seen(key), key
+
+
+def daily_summary(rows, errors):
+    valid = [r for r in rows if r["signal"] != "DATA_STALE"]
+    if not valid:
+        return "Analysis unavailable today. No buy/sell recommendations."
+    # Suppress conflicting timeframes rather than recommending both buying and
+    # selling the same investment in a compact message without an explanation.
+    buys = {r["symbol"] for r in valid if r["signal"] == "BUY_CANDIDATE"}
+    exits = {r["symbol"] for r in valid if r["signal"] == "EXIT_REVIEW"}
+    conflicts = buys & exits
+    lines = []
+    for horizon, label in (("SWING", "Swing"), ("LONG_TERM", "Long-term")):
+        candidates = [r for r in valid if r["horizon"] == horizon and r["symbol"] not in conflicts]
+        buy = sorted({r["symbol"] for r in candidates if r["signal"] == "BUY_CANDIDATE"})
+        sell = sorted({r["symbol"] for r in candidates if r["signal"] == "EXIT_REVIEW" and r["owned"]})
+        actions = []
+        if buy:
+            actions.append("Buy " + ", ".join(buy))
+        if sell:
+            actions.append("Sell " + ", ".join(sell))
+        if actions:
+            lines.append(label + ": " + "; ".join(actions) + ".")
+    if not lines:
+        lines = ["No buys or sells recommended" + (" from available data." if errors else ".")]
+    else:
+        lines.insert(0, "Daily-price signals")
+    if conflicts:
+        lines.append("Mixed signals: " + ", ".join(sorted(conflicts)) + ".")
+    if errors:
+        affected = sorted({key.removesuffix(" news") for key in errors})
+        brief = ", ".join(affected[:3])
+        if len(affected) > 3:
+            brief += f" (+{len(affected)-3} more)"
+        lines.append("Incomplete data: " + brief + ".")
+    return "\n".join(lines)
+
+
+def deliver_daily(report, config, state, now=None, send=telegram):
+    now = now or datetime.now(UTC)
+    due, key = daily_due(config, state, now)
+    if due:
+        send(daily_summary(report["results"], report["errors"]))
+        state.mark(key)
+    return due
+
+
 def scan(config, notify=False):
     now = datetime.now(UTC)
     rows, errors, cache, news = [], {}, {}, {}
@@ -363,7 +417,7 @@ def scan(config, notify=False):
     if notify:
         state = AlertState(ROOT / "runtime" / "alerts.sqlite3")
         try:
-            deliver(rows, errors, state, news=news)
+            deliver_daily(report, config, state)
         finally:
             state.db.close()
     return report
@@ -417,7 +471,7 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("command", choices=["scan", "watch", "setup-telegram", "test-telegram"])
     parser.add_argument("--config", type=Path, default=ROOT / "config.json")
-    parser.add_argument("--notify", action="store_true", help="Send Telegram alerts; watch always sends")
+    parser.add_argument("--notify", action="store_true", help="Send the brief daily Telegram summary if due")
     args = parser.parse_args()
     load_env()
     try:
@@ -442,9 +496,17 @@ def main():
                 fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
             except BlockingIOError:
                 raise RuntimeError("Another watch process is already running") from None
+            print("Daily summary scheduled for 12 noon America/Toronto; routine detailed alerts are disabled.", flush=True)
             while True:
                 try:
-                    scan(config, True)
+                    config = json.loads(args.config.read_text())
+                    state = AlertState(ROOT / "runtime" / "alerts.sqlite3")
+                    try:
+                        due, _ = daily_due(config, state, datetime.now(UTC))
+                    finally:
+                        state.db.close()
+                    if due:
+                        scan(config, True)
                 except Exception as exc:
                     print(f"Scan failed: {type(exc).__name__}: {exc}", flush=True)
                 time.sleep(max(60, config["poll_seconds"]))

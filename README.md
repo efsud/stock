@@ -2,7 +2,7 @@
 
 A Python 3.11+ daily-close research monitor for your Canadian/US holdings and BTC-CAD. It generates separate **SWING** and **LONG_TERM** signals, ranks technical strength and historical price risk, screens a configurable list of additional stocks, and sends Telegram alerts. No Python packages are required.
 
-**Status:** software built locally; Telegram and an always-on host must be configured before alerts are live. It does not place orders. This is an unbacktested technical strategy, not a forecast or a promise of profitable timing.
+**Status:** Telegram is configured locally and a daily noon Toronto-time schedule is active in the app. Credentials remain local. It does not place orders. This is an unbacktested technical strategy, not a forecast or a promise of profitable timing.
 
 ## Run an analysis
 
@@ -31,17 +31,35 @@ python3 -m stock_agent scan --notify
 
 Credentials are stored only in a local `.env` with owner-only permissions, ignored by Git. You can alternatively supply `TELEGRAM_BOT_TOKEN` and `TELEGRAM_CHAT_ID` as environment variables. The setup command saves credentials; the test command sends a message to your selected chat. Do not share `.env`.
 
-## Continuous monitoring
+## One brief daily notification
+
+The app's **Daily noon stock summary** schedule runs `python3 -m stock_agent scan --notify` every day at 12:00 noon in America/Toronto, starting November 2, 2026. Keep the app and this project available on an awake, online computer for local execution. The old detailed-alert watcher was stopped. You do not need to keep a separate Terminal watcher running for this app schedule.
+
+The program analyses the configured holdings and discovery universe, saves the detailed report locally, and sends one short Telegram message. Examples:
+
+```text
+No buys or sells recommended.
+```
+
+```text
+Daily-price signals
+Swing: Buy XEG.TO; Sell NVDA.
+Long-term: Buy TD.TO.
+```
+
+Those examples illustrate formatting, not current recommendations. Only actionable symbols appear. Sell actions are limited to configured holdings. Conflicting buy/sell timeframes are withheld and briefly marked as mixed signals. A short incomplete-data warning replaces any implication that unavailable data was successfully analysed. No separate routine news, unusual-activity or stock-status messages are sent.
+
+`daily_notification` in `config.json` sets the delivery timezone, noon target and one-hour delivery/retry window. `scan --notify` sends only within that window and only once per local date. Outside the window, it generates the report without sending Telegram. SQLite remembers successful delivery across restarts; failed sends remain retryable. Keep `runtime/` to preserve this history. A crash or uncertain network response after Telegram accepts a message but before SQLite records it can still cause a duplicate.
+
+The analysis uses **completed daily candles**, not live noon prices. Equity bars become eligible after 17:00 in the exchange timezone; crypto bars after 00:00 UTC. Technical rules do not incorporate every fundamental or news event. Recent provider-associated headlines are saved for review, not automatically scored as buy/sell causes.
+
+For running independently of the app schedule, the optional Terminal watcher also respects the daily delivery window:
 
 ```sh
 python3 -m stock_agent watch
 ```
 
-Checks every 15 minutes, but uses **completed daily candles**. Equity bars become eligible at 17:00 in the exchange timezone; crypto bars after 00:00 UTC. It is not an intraday timing service. The computer must be awake, online, and the process running. Use a persistent server or OS service for unattended operation; merely closing this chat does not host the agent. Send failures are retried on the next scan, and errors are printed to the terminal. There is no external uptime watchdog yet.
-
-Signals are sent on a change of regime per symbol and horizon, including actionable signals on the first notifying run. A continuing BUY or EXIT condition does not produce repeated alerts. WAIT resets the regime. Unusual activity is alerted once per symbol/day, separately from trade signals. SQLite state persists across restarts. Do not delete `runtime/` unless you intend to reset alert history. A process lock blocks multiple `watch` instances; do not run notifying one-off scans alongside the watcher. A crash after Telegram accepts a message but before SQLite records delivery can cause a duplicate; Telegram does not offer an idempotency key.
-
-With `news_enabled: true`, the agent also fetches up to five provider-associated headlines from the previous 24 hours per watchlist symbol and sends each new linked item once as **NEWS REVIEW**. These are unverified associations, not sentiment scores or trading instructions; feeds can be empty, delayed, incomplete or unavailable. Headline polling does not detect all corporate events. Feed failures appear in the report and health alerts.
+It checks the schedule every 15 minutes and scans only when the daily summary is due. Keep that Terminal process running if you choose this alternative. Do not run it alongside the app automation or another notifying scan. A process lock blocks multiple watchers. There is no external uptime watchdog.
 
 ## How the signals work
 
@@ -67,7 +85,7 @@ Your list combines broad equities, technology/semiconductors, energy, metals/min
 
 `config.json` contains qualitative risk notes for each instrument. Fundamental valuation, financial statements, earnings calendars, trust NAV discounts, ETF holdings overlap, macroeconomic releases, breaking news, taxes, trading costs and spread/liquidity checks are **not automated in this version**. An unusual move alert cannot explain why a company moved. A licensed intraday/news provider and additional analysis are required for comprehensive event detection and intraday alerts. Historical performance and these unbacktested rules cannot establish a best time to buy or sell.
 
-The Yahoo Finance chart endpoint is unofficial, may be delayed, rate limited, unavailable or change without notice. It is a prototype data source, not an exchange-grade feed. Provider failures are explicit in reports and trigger daily Telegram health notices when delivery is working. Benchmark failure disables new buy candidates. No trading decision should be inferred from missing data. Review Yahoo/provider terms for your intended use and replace the adapter if needed.
+The Yahoo Finance chart endpoint is unofficial, may be delayed, rate limited, unavailable or change without notice. It is a prototype data source, not an exchange-grade feed. Provider failures are explicit in reports and briefly noted in the daily summary. Benchmark failure disables new buy candidates. No trading decision should be inferred from missing data. Review Yahoo/provider terms for your intended use and replace the adapter if needed.
 
 ## Validate
 
