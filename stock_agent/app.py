@@ -12,6 +12,7 @@ import statistics
 import sys
 import time
 import xml.etree.ElementTree as ET
+from concurrent.futures import ThreadPoolExecutor
 from email.utils import parsedate_to_datetime
 from datetime import datetime, timedelta, timezone
 from urllib.error import HTTPError, URLError
@@ -313,7 +314,7 @@ def daily_due(config, state, now):
     return due and not state.seen(key), key
 
 
-def daily_summary(rows, errors):
+def daily_summary(rows, errors, max_new=3):
     valid = [r for r in rows if r["signal"] != "DATA_STALE"]
     if not valid:
         return "Analysis unavailable today. No buy/sell recommendations."
@@ -322,10 +323,18 @@ def daily_summary(rows, errors):
     buys = {r["symbol"] for r in valid if r["signal"] == "BUY_CANDIDATE"}
     exits = {r["symbol"] for r in valid if r["signal"] == "EXIT_REVIEW"}
     conflicts = buys & exits
+    # Holdings always remain visible; only the strongest outside ideas use the
+    # limited Telegram space. Rank symbols once across both holding horizons.
+    ranked = sorted((r for r in valid if not r["owned"] and r["signal"] == "BUY_CANDIDATE"
+                     and r["symbol"] not in conflicts),
+                    key=lambda r: (-r.get("strength", 0), r.get("atr_pct", float("inf")), r["symbol"]))
+    selected = set(list(dict.fromkeys(r["symbol"] for r in ranked))[:max(0, int(max_new))])
     lines = []
     for horizon, label in (("SWING", "Swing"), ("LONG_TERM", "Long-term")):
-        candidates = [r for r in valid if r["horizon"] == horizon and r["symbol"] not in conflicts]
-        buy = sorted({r["symbol"] for r in candidates if r["signal"] == "BUY_CANDIDATE"})
+        candidates = [r for r in valid if r["horizon"] == horizon and r["symbol"] not in conflicts
+                      and (r["owned"] or r["symbol"] in selected)]
+        buy = sorted({r["symbol"] for r in candidates if r["signal"] == "BUY_CANDIDATE"},
+                     key=lambda s: (not any(r["symbol"] == s and r["owned"] for r in candidates), s))
         sell = sorted({r["symbol"] for r in candidates if r["signal"] == "EXIT_REVIEW" and r["owned"]})
         actions = []
         if buy:
@@ -353,23 +362,59 @@ def deliver_daily(report, config, state, now=None, send=telegram):
     now = now or datetime.now(UTC)
     due, key = daily_due(config, state, now)
     if due:
-        send(daily_summary(report["results"], report["errors"]))
+        send(daily_summary(report["results"], report["errors"], config.get("max_new_ideas_daily", 3)))
         state.mark(key)
     return due
+
+
+def universe(config):
+    groups = {}
+    if config.get("universe_file"):
+        path = Path(config["universe_file"])
+        if not path.is_absolute():
+            path = ROOT / path
+        groups = json.loads(path.read_text())["groups"]
+    sectors = {symbol: group for group, symbols in groups.items() for symbol in symbols}
+    symbols = list(dict.fromkeys(config["watchlist"] + config.get("holdings", []) + [config["benchmark"]]
+                                + config.get("discovery", []) + list(sectors)))
+    return symbols, sectors
+
+
+def discovery_gate(data, config):
+    bars = data["bars"][-20:]
+    price = bars[-1]["raw"]
+    volume = statistics.mean(b["v"] for b in bars)
+    turnover = statistics.mean(b["raw"] * b["v"] for b in bars)
+    eligible = (price >= config.get("discovery_min_price", 5)
+                and volume >= config.get("discovery_min_volume20", 50000)
+                and turnover >= config.get("discovery_min_turnover20", 1000000))
+    return eligible, volume, turnover
 
 
 def scan(config, notify=False):
     now = datetime.now(UTC)
     rows, errors, cache, news = [], {}, {}, {}
-    symbols = list(dict.fromkeys(config["watchlist"] + config.get("discovery", []) + [config["benchmark"]]))
-    for symbol in symbols:
+    symbols, sectors = universe(config)
+    priority = set(config["watchlist"] + config.get("holdings", []) + [config["benchmark"]])
+    def fetch(symbol):
         if symbol in config.get("unresolved", {}):
-            errors[symbol] = config["unresolved"][symbol]
-            continue
+            return symbol, None, config["unresolved"][symbol]
         try:
-            cache[symbol] = history(symbol, now)
+            return symbol, history(symbol, now), None
         except (RuntimeError, KeyError, IndexError, TypeError, ValueError) as exc:
-            errors[symbol] = str(exc)
+            return symbol, None, str(exc)
+    def collect(results):
+        for symbol, data, error in results:
+            if error:
+                errors[symbol] = error
+            else:
+                cache[symbol] = data
+    # Fetch the user's holdings and benchmark first, before wider discovery.
+    print(f"Scanning {len(symbols)} symbols; holdings and benchmark first.", flush=True)
+    collect(map(fetch, (s for s in symbols if s in priority)))
+    workers = max(1, min(4, config.get("discovery_workers", 3)))
+    with ThreadPoolExecutor(max_workers=workers) as pool:
+        collect(pool.map(fetch, (s for s in symbols if s not in priority)))
     benchmark = cache.get(config["benchmark"])
     if benchmark:
         age = now - datetime.fromtimestamp(benchmark["bars"][-1]["t"], UTC)
@@ -380,6 +425,14 @@ def scan(config, notify=False):
             for horizon in ("SWING", "LONG_TERM"):
                 row = analyse(data, benchmark, config, now, horizon)
                 row["source"] = "watchlist" if symbol in config["watchlist"] else "discovery"
+                row["sector_group"] = sectors.get(symbol, "priority_holdings")
+                eligible, volume, turnover = discovery_gate(data, config)
+                row["discovery_eligible"] = eligible
+                row["average_volume20"] = round(volume)
+                row["average_turnover20_native_currency"] = round(turnover)
+                if symbol not in priority and not eligible and row["signal"] == "BUY_CANDIDATE":
+                    row["signal"] = "WAIT"
+                    row["reasons"].append("Outside idea excluded: minimum price/volume/turnover gate failed")
                 rows.append(row)
                 if row["signal"] == "DATA_STALE":
                     errors[symbol] = "Stale daily prices; signals suppressed"
@@ -395,7 +448,8 @@ def scan(config, notify=False):
                 errors[f"{symbol} news"] = str(exc)
     report = {"generated_at": now.isoformat(), "data_source": "Yahoo Finance unofficial daily chart endpoint",
               "horizon": "Separate SWING and LONG_TERM daily-close rules; holding period is not predicted",
-              "benchmark": config["benchmark"], "results": sorted(rows, key=lambda x: -x["strength"]), "news": news, "errors": errors}
+              "benchmark": config["benchmark"], "coverage": {"requested": len(symbols), "analysed": len(cache), "sector_groups": list(dict.fromkeys(sectors.values()))},
+              "results": sorted(rows, key=lambda x: (x["source"] != "watchlist", -x["strength"])), "news": news, "errors": errors}
     folder = ROOT / "reports"
     folder.mkdir(exist_ok=True)
     (folder / "latest.json").write_text(json.dumps(report, indent=2))

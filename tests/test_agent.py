@@ -6,7 +6,7 @@ import unittest
 from unittest.mock import patch
 from datetime import datetime, timedelta, timezone
 
-from stock_agent.app import AlertState, analyse, choose_destination, closed_bar, daily_due, daily_summary, deliver, deliver_daily, parse_headlines, rsi
+from stock_agent.app import AlertState, analyse, choose_destination, closed_bar, daily_due, daily_summary, deliver, deliver_daily, discovery_gate, parse_headlines, rsi, universe
 
 NOW = datetime(2026, 11, 1, 23, tzinfo=timezone.utc)
 CONFIG = json.loads((Path(__file__).resolve().parents[1] / 'config.json').read_text())
@@ -56,6 +56,22 @@ class DailySummaryTests(unittest.TestCase):
         self.assertNotIn('Sell A', text)
         self.assertIn('Mixed signals: A.', text)
 
+    def test_outside_ideas_limited_and_holdings_keep_priority(self):
+        rows = [dict(self.row(s, 'BUY_CANDIDATE', owned=False), strength=score, atr_pct=2)
+                for s, score in [('A', 85), ('B', 90), ('C', 95), ('D', 100)]]
+        rows += [self.row('HOLDING', 'BUY_CANDIDATE'), self.row('SELL_HOLDING', 'EXIT_REVIEW')]
+        text = daily_summary(rows, {}, max_new=2)
+        self.assertIn('Buy HOLDING, C, D;', text)
+        self.assertIn('Sell SELL_HOLDING', text)
+        self.assertNotIn('Buy A', text)
+        self.assertNotIn(', B', text)
+
+    def test_same_outside_symbol_uses_only_one_idea_slot(self):
+        rows = [dict(self.row('A', 'BUY_CANDIDATE', horizon=h, owned=False), strength=100)
+                for h in ('SWING', 'LONG_TERM')]
+        rows.append(dict(self.row('B', 'BUY_CANDIDATE', owned=False), strength=90))
+        self.assertIn('Buy A, B', daily_summary(rows, {}, max_new=2))
+
     def test_missing_data_is_not_a_no_action_recommendation(self):
         text = daily_summary([self.row('A', 'DATA_STALE')], {'A': 'stale'})
         self.assertIn('Analysis unavailable', text)
@@ -91,6 +107,27 @@ class DailySummaryTests(unittest.TestCase):
             self.assertTrue(daily_due(CONFIG, state, winter)[0])
             self.assertFalse(daily_due(CONFIG, state, winter+timedelta(hours=1))[0])
             state.db.close()
+
+
+class UniverseTests(unittest.TestCase):
+    def test_broad_universe_keeps_priority_and_has_no_duplicate_symbols(self):
+        symbols, sectors = universe(CONFIG)
+        self.assertGreater(len(symbols), 250)
+        self.assertGreaterEqual(len(set(sectors.values())), 11)
+        self.assertEqual(symbols[:len(CONFIG['watchlist'])], CONFIG['watchlist'])
+        self.assertEqual(len(symbols), len(set(symbols)))
+        extra = dict(CONFIG, holdings=CONFIG['holdings']+['EXTRA_HOLDING'])
+        self.assertIn('EXTRA_HOLDING', universe(extra)[0])
+
+    def test_discovery_liquidity_gate(self):
+        data = series()
+        self.assertFalse(discovery_gate(data, CONFIG)[0])
+        for bar in data['bars']:
+            bar['v'] = 100000
+        self.assertTrue(discovery_gate(data, CONFIG)[0])
+        for bar in data['bars']:
+            bar['raw'] = 1
+        self.assertFalse(discovery_gate(data, CONFIG)[0])
 
 
 class AnalysisTests(unittest.TestCase):

@@ -13,7 +13,19 @@ python3 -m stock_agent scan
 
 Open `reports/latest.md` for readable analysis or `reports/latest.json` for structured data. Prices include their quote currency, provider identity and last completed daily-bar timestamp. Reports are ignored by Git.
 
-All 16 requested tickers are recorded in `config.json` and marked as holdings. `SSPM.TP` is unresolved and disabled pending its full investment name and exchange. No ticker is silently replaced by its US equivalent. Unavailable provider symbols and insufficient history are reported as data issues. The discovery list is a small editable universe of Canadian/US companies, not an exhaustive market search.
+All 16 requested tickers are recorded in `config.json` and marked as holdings. `SSPM.TP` is unresolved and disabled pending its full investment name and exchange. No ticker is silently replaced by its US equivalent. Unavailable provider symbols and insufficient history are reported as data issues.
+
+## Broad screening with holdings first
+
+`universe.json` expands coverage to **306 configured symbols in total**, including **290 outside your original list**. It is a curated candidate list, not a verified current index membership list or an exhaustive exchange-wide search. Each scan validates symbols against the price provider; unavailable listings are excluded and reported rather than silently substituted. The list needs periodic maintenance as listings and companies change.
+
+Coverage includes Canadian and US companies across technology, communication services, consumer discretionary, consumer staples, energy, financials, health care, industrials, materials, utilities and real estate. Regional and sector ETFs broaden coverage to developed/emerging markets, smaller US companies, bonds, gold/silver/platinum/palladium, copper and other commodity exposures. These are screening candidates, not endorsed investments. Commodity funds may have futures/roll costs and bond funds have duration/credit risks that technical rules do not fully evaluate.
+
+The user's holdings and benchmark are fetched first and appear first in the detailed report. Other price requests use three workers, configurable up to four. Headlines remain focused on the original holdings. All eligible securities receive the same transparent technical analysis; the discovery list is not silently rotated or sampled.
+
+Outside buy candidates must have a quoted price of at least 5 in their quote currency, 20-day average volume of at least 50,000 units and average daily traded value of at least 1,000,000 in native quote currency. These are coarse liquidity checks, not spread/execution guarantees or common-currency comparisons. They do not suppress alerts for the user's existing holdings. Failed discovery gates appear in the full report and suppress outside buy candidates.
+
+The noon Telegram summary retains all actionable holding signals, lists holding buys ahead of outside ideas, and includes at most **three distinct outside buy ideas** across both horizons. Those ideas rank by technical strength, then lower ATR percentage; this is not a calibrated expected-return ranking. Sell messages remain restricted to configured holdings. The full screening results, sectors, quote currency, liquidity measures and data failures remain in `reports/latest.json` and `reports/latest.md`. This broadens technical screening; fundamental valuation, financial-statement analysis and news interpretation remain outside this version.
 
 ## Create your Telegram bot
 
@@ -47,7 +59,7 @@ Swing: Buy XEG.TO; Sell NVDA.
 Long-term: Buy TD.TO.
 ```
 
-Those examples illustrate formatting, not current recommendations. Only actionable symbols appear. Sell actions are limited to configured holdings. Conflicting buy/sell timeframes are withheld and briefly marked as mixed signals. A short incomplete-data warning replaces any implication that unavailable data was successfully analysed. No separate routine news, unusual-activity or stock-status messages are sent.
+Those examples illustrate formatting, not current recommendations. Only actionable symbols appear. Sell actions are limited to configured holdings. Conflicting buy/sell timeframes are withheld and briefly marked as mixed signals. A short incomplete-data warning replaces any implication that unavailable data was successfully analysed. No separate routine news, unusual-activity or stock-status messages are sent. `max_new_ideas_daily` controls the cap on outside opportunities.
 
 `daily_notification` in `config.json` sets the delivery timezone, noon target and one-hour delivery/retry window. `scan --notify` sends only within that window and only once per local date. Outside the window, it generates the report without sending Telegram. SQLite remembers successful delivery across restarts; failed sends remain retryable. Keep `runtime/` to preserve this history. A crash or uncertain network response after Telegram accepts a message but before SQLite records it can still cause a duplicate.
 
