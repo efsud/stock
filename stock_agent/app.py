@@ -369,6 +369,31 @@ def scan(config, notify=False):
     return report
 
 
+def choose_destination(token, bot_username):
+    while True:
+        updates = request_json(f"https://api.telegram.org/bot{token}/getUpdates")
+        if not updates.get("ok"):
+            raise RuntimeError("Cannot list chats. Send /start to your bot and try again; an existing webhook can prevent chat discovery.")
+        chats = {str(u["message"]["chat"]["id"]): u["message"]["chat"]
+                 for u in updates.get("result", []) if "message" in u}
+        if chats:
+            for chat_id, chat in chats.items():
+                print(f"Chat {chat_id}: {chat.get('title', chat.get('first_name', 'unnamed'))}")
+            print("Enter the number after 'Chat' for the chat where you want alerts.")
+        else:
+            print(f"No chats found. In Telegram, open @{bot_username} (your new bot, not BotFather).")
+            print("Tap Start or send /start, then return here and press Enter to refresh.")
+        answer = input("Destination chat ID (Enter = refresh; q = cancel): ").strip()
+        if answer.lower() == "q":
+            raise RuntimeError("Setup cancelled; no credentials were saved")
+        if not answer:
+            continue
+        if not answer.lstrip("-").isdigit() or answer == "0":
+            print("Use a numeric chat ID, such as 123456789. Press Enter to refresh the list.")
+            continue
+        return answer
+
+
 def setup_telegram():
     print("Create a bot with @BotFather, then open your bot chat and send /start.")
     token = getpass.getpass("Bot token (hidden; stored only in ignored .env): ").strip()
@@ -377,14 +402,7 @@ def setup_telegram():
     me = request_json(f"https://api.telegram.org/bot{token}/getMe")
     if not me.get("ok"):
         raise RuntimeError("Bot authentication failed")
-    updates = request_json(f"https://api.telegram.org/bot{token}/getUpdates")
-    chats = {str(u["message"]["chat"]["id"]): u["message"]["chat"]
-             for u in updates.get("result", []) if "message" in u}
-    for chat_id, chat in chats.items():
-        print(f"Chat {chat_id}: {chat.get('title', chat.get('first_name', 'unnamed'))}")
-    chat_id = input("Destination chat ID (choose explicitly): ").strip()
-    if not chat_id or any(ch.isspace() for ch in chat_id):
-        raise RuntimeError("Chat ID is required")
+    chat_id = choose_destination(token, me.get("result", {}).get("username", "your_bot"))
     path = ROOT / ".env"
     existing = path.read_text().splitlines() if path.exists() else []
     existing = [line for line in existing if not line.startswith(("TELEGRAM_BOT_TOKEN=", "TELEGRAM_CHAT_ID="))]

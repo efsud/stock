@@ -3,9 +3,10 @@ import json
 from pathlib import Path
 import tempfile
 import unittest
+from unittest.mock import patch
 from datetime import datetime, timedelta, timezone
 
-from stock_agent.app import AlertState, analyse, closed_bar, deliver, parse_headlines, rsi
+from stock_agent.app import AlertState, analyse, choose_destination, closed_bar, deliver, parse_headlines, rsi
 
 NOW = datetime(2026, 11, 1, 23, tzinfo=timezone.utc)
 CONFIG = json.loads((Path(__file__).resolve().parents[1] / 'config.json').read_text())
@@ -19,6 +20,21 @@ def series():
                      'o': price, 'h': price+1, 'l': price-1, 'c': price, 'v': 1000, 'raw': price})
     return {'symbol': 'TEST', 'name': 'Test', 'currency': 'CAD', 'crypto': False,
             'timezone': 'America/Toronto', 'bars': bars}
+
+
+class SetupTests(unittest.TestCase):
+    def test_empty_chat_list_can_refresh_without_reentering_token(self):
+        responses = [{'ok': True, 'result': []}, {'ok': True, 'result': [
+            {'message': {'chat': {'id': 12345, 'first_name': 'Test'}}}]}]
+        with patch('stock_agent.app.request_json', side_effect=responses) as request, \
+             patch('builtins.input', side_effect=['', '12345']), patch('builtins.print'):
+            self.assertEqual(choose_destination('test-token', 'test_bot'), '12345')
+            self.assertEqual(request.call_count, 2)
+
+    def test_blank_and_invalid_chat_id_do_not_exit_setup(self):
+        with patch('stock_agent.app.request_json', return_value={'ok': True, 'result': []}), \
+             patch('builtins.input', side_effect=['', 'my_bot', '-12345']), patch('builtins.print'):
+            self.assertEqual(choose_destination('test-token', 'test_bot'), '-12345')
 
 
 class AnalysisTests(unittest.TestCase):

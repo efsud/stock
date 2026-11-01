@@ -21,7 +21,7 @@ All 16 requested tickers are recorded in `config.json` and marked as holdings. `
 2. Send `/newbot`. Choose a display name, then a unique username ending in `bot`.
 3. BotFather gives you a secret API token. Keep it private; do not paste it into chat, a GitHub issue or source code.
 4. Open the new bot's chat and send `/start`. For group alerts, add the bot to that group and send a command addressed to it, such as `/start@YourBotUsername`.
-5. Run the setup command below. It asks for the token using a hidden prompt, displays chats that recently messaged your bot, and asks you to explicitly choose the destination chat ID. If no chats appear, send `/start` again and rerun setup. An existing webhook can prevent `getUpdates`; use a new dedicated bot or manage that webhook yourself.
+5. Run the setup command below. It asks for the token using a hidden prompt, displays chats that recently messaged your bot, and asks you to explicitly choose the destination chat ID. Enter the number after `Chat` for your intended destination. If no chats appear, send `/start` to your new bot (not BotFather), then press Enter in Terminal to refresh without reentering your token. Enter `q` to cancel. An existing webhook can prevent `getUpdates`; use a new dedicated bot or manage that webhook yourself.
 
 ```sh
 python3 -m stock_agent setup-telegram
