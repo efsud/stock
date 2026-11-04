@@ -1,6 +1,6 @@
 # Stock agent
 
-A Python 3.11+ daily-close research monitor for your Canadian/US holdings and BTC-CAD. It generates separate **SWING** and **LONG_TERM** signals, ranks technical strength and historical price risk, screens a configurable list of additional stocks, and sends Telegram alerts. No Python packages are required.
+A Python 3.11+ research monitor for your Canadian/US holdings and BTC-CAD. It generates separate **6-month** and **1-year** signals using completed weekly closes over 26 and 52 weeks, ranks technical strength and historical price risk, screens a broad list of additional stocks, and sends one daily Telegram summary. No Python packages are required.
 
 **Status:** Telegram is configured locally and a daily noon Toronto-time schedule is active in the app. Credentials remain local. It does not place orders. This is an unbacktested technical strategy, not a forecast or a promise of profitable timing.
 
@@ -25,7 +25,7 @@ The user's holdings and benchmark are fetched first and appear first in the deta
 
 Outside buy candidates must have a quoted price of at least 5 in their quote currency, 20-day average volume of at least 50,000 units and average daily traded value of at least 1,000,000 in native quote currency. These are coarse liquidity checks, not spread/execution guarantees or common-currency comparisons. They do not suppress alerts for the user's existing holdings. Failed discovery gates appear in the full report and suppress outside buy candidates.
 
-The noon Telegram summary retains all actionable holding signals, lists holding buys ahead of outside ideas, and includes at most **three distinct outside buy ideas** across both horizons. Those ideas rank by technical strength, then lower ATR percentage; this is not a calibrated expected-return ranking. Sell messages remain restricted to configured holdings. The full screening results, sectors, quote currency, liquidity measures and data failures remain in `reports/latest.json` and `reports/latest.md`. This broadens technical screening; fundamental valuation, financial-statement analysis and news interpretation remain outside this version.
+The noon Telegram summary retains all actionable holding signals, lists holding buys ahead of outside ideas, and includes at most **three distinct outside buy ideas** across both horizons. Those ideas rank by technical strength, then lower historical weekly-return volatility; this is not a calibrated expected-return ranking. Sell messages remain restricted to configured holdings. The full screening results, sectors, quote currency, liquidity measures and data failures remain in `reports/latest.json` and `reports/latest.md`. This broadens technical screening; fundamental valuation, financial-statement analysis and news interpretation remain outside this version.
 
 ## Create your Telegram bot
 
@@ -54,16 +54,16 @@ No buys or sells recommended.
 ```
 
 ```text
-Daily-price signals
-Swing: Buy XEG.TO; Sell NVDA.
-Long-term: Buy TD.TO.
+6–12 month research signals
+6-month: Buy XEG.TO; Sell NVDA.
+1-year: Buy TD.TO.
 ```
 
 Those examples illustrate formatting, not current recommendations. Only actionable symbols appear. Sell actions are limited to configured holdings. Conflicting buy/sell timeframes are withheld and briefly marked as mixed signals. A short incomplete-data warning replaces any implication that unavailable data was successfully analysed. No separate routine news, unusual-activity or stock-status messages are sent. `max_new_ideas_daily` controls the cap on outside opportunities.
 
 `daily_notification` in `config.json` sets the delivery timezone, noon target and one-hour delivery/retry window. `scan --notify` sends only within that window and only once per local date. Outside the window, it generates the report without sending Telegram. SQLite remembers successful delivery across restarts; failed sends remain retryable. Keep `runtime/` to preserve this history. A crash or uncertain network response after Telegram accepts a message but before SQLite records it can still cause a duplicate.
 
-The analysis uses **completed daily candles**, not live noon prices. Equity bars become eligible after 17:00 in the exchange timezone; crypto bars after 00:00 UTC. Technical rules do not incorporate every fundamental or news event. Recent provider-associated headlines are saved for review, not automatically scored as buy/sell causes.
+The provider supplies completed daily candles, which are aggregated into **completed Friday-week observations** for both stocks and Bitcoin. A Friday-week becomes eligible from Saturday in the exchange timezone; the unfinished week and Bitcoin weekend prices do not drive the trend decision. On holiday weeks, the last available weekday close is used. The latest daily quote is report context, not a new entry/exit trigger. Signals generally remain unchanged during the week, though stale/missing data, price-history corrections, or liquidity/quote-safety checks can withhold a recommendation. Technical rules do not incorporate every fundamental or news event. Recent provider-associated headlines are saved for review, not automatically scored as buy/sell causes.
 
 For running independently of the app schedule, the optional Terminal watcher also respects the daily delivery window:
 
@@ -77,19 +77,19 @@ It checks the schedule every 15 minutes and scans only when the daily summary is
 
 | Output | Meaning |
 |---|---|
-| SWING BUY_CANDIDATE | Close above previous 20 closes; strength ≥80; RSI 50–70; positive benchmark-relative return; ATR within configured ceiling |
-| SWING EXIT_REVIEW | Below 200-day average, or below both previous 20 closes and 50-day average |
-| LONG_TERM BUY_CANDIDATE | Close above 200-day average; 50-day average above 200 and rising; RSI 45–65; price no more than 15% above 200-day average; positive relative return; ATR within ceiling |
-| LONG_TERM EXIT_REVIEW | Close and 50-day average both below 200-day average |
+| SIX_MONTH | Uses 26 weeks of adjusted weekly returns; compares 13-week and 26-week price averages |
+| ONE_YEAR | Uses 52 weeks of adjusted weekly returns; compares 26-week and 52-week price averages |
+| BUY_CANDIDATE | All six trend/return tests below pass; weekly close no more than 15% above the long average; full-window annualized weekly-return volatility ≤60% |
+| EXIT_REVIEW | Weekly close and shorter average below the long average, long average flat/falling versus four weeks earlier, and full-window return negative |
 | WAIT | No entry/exit condition; not a command to sell or a guarantee of safety |
 | DATA_STALE | Data exceeds 4 calendar days for equities or 2 for crypto; no trading/activity alerts |
 | Unusual activity | Absolute daily adjusted move ≥5% or volume ≥2.5× previous 20-day average; investigate cause, not an automatic buy/sell |
 
-Swing and long-term conditions may disagree because they answer different questions. The long-term horizon still uses technical rules; it is not a valuation model.
+The six-month and one-year assessments may disagree. Conflicting buy/sell assessments are withheld from actions and briefly marked as mixed signals. These are price-history lookbacks, not promised holding periods or business valuation models. At least 30 consecutive completed weeks are required for six-month analysis and 56 for one-year analysis, including the four-week trend comparison. Missing history is never silently replaced by a shorter window.
 
-Strength is the percentage of six rules satisfied: price above SMA50, price above SMA200, SMA50 above SMA200, rising SMA50, RSI 50–70, and positive 63 shared-session return relative to XEQT.TO. It is **not a confidence probability**. Benchmark returns use shared dates and native quote currencies; USD stocks are not converted into CAD. The score is a trend/momentum summary, not business quality or financial strength.
+Strength is the percentage of six full-window rules satisfied: weekly close above the long average, close above the shorter average, shorter average above the long average, long average rising versus four weeks earlier, positive full-window return, and positive return relative to XEQT.TO over the same 26 or 52 Friday-weeks. It is **not a confidence probability**. Missing benchmark observations disable buy candidates. Benchmark returns use matching Friday-week keys and native quote currencies; USD stocks are not converted into CAD. Holidays can make the last available session differ between exchanges within the same week. The score is a price-trend summary, not business quality or financial strength.
 
-Risk labels derive from 63-return annualized historical volatility: below 20% LOWER, 20–35% MODERATE, 35–60% HIGH, ≥60% VERY HIGH; BTC is always VERY HIGH. LOWER does not mean safe. The report also shows 14-day Wilder ATR and an illustrative close-minus-2×ATR invalidation. Stops can gap; this is not a personalized stop-loss or position size. Indicators use adjusted OHLC so distributions and splits do not mechanically create signals. Reported close and invalidation are converted back to current quoted units.
+Risk labels derive from the selected 26 or 52 weekly returns, annualized using the square root of 52: below 20% LOWER, 20–35% MODERATE, 35–60% HIGH, ≥60% VERY HIGH; BTC is always VERY HIGH. Each assessment reports its full-window return and maximum drawdown between weekly closes. Intraday and between-week losses can be larger. LOWER does not mean safe. Daily RSI, ATR, unusual-move diagnostics and an illustrative 2-ATR invalidation remain report-only context and do not drive entries/exits. Entry risk limits use historical weekly volatility and distance from the long price average. Stops can gap; this is not a personalized stop-loss or position size. Prices are adjusted for distributions/splits for analysis; current quoted units are retained for report prices.
 
 ## Portfolio context and limits
 
@@ -105,7 +105,7 @@ The Yahoo Finance chart endpoint is unofficial, may be delayed, rate limited, un
 python3 -m unittest discover -s tests -v
 ```
 
-Tests cover partial/stale candles, RSI, breakdown exits, separate horizons, retryable delivery failures and persistent deduplication.
+Tests cover partial/stale candles, full six-month/year history, missing weeks, immunity of trend decisions to unfinished-week price changes, sustained breakdowns, separate horizons, retryable delivery failures and persistent daily deduplication.
 
 ## Reference sources
 

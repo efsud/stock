@@ -1,21 +1,77 @@
 {
-  "watchlist": ["XEG.TO", "ZEO.TO", "BTC-CAD", "XEQT.TO", "VFV.TO", "SPPP.TO", "FINN.NE", "PHYS.TO", "ZNQ.TO", "NVDA", "PSLV.TO", "MU.TO", "COPP.TO", "ZGD.TO", "SSPM.TP", "AMD.TO"],
-  "unresolved": {"SSPM.TP": "Please confirm the investment name and exchange; no substitute has been made."},
-  "discovery": ["RY.TO", "TD.TO", "ENB.TO", "CNQ.TO", "CNR.TO", "CSU.TO", "SHOP.TO", "AAPL", "MSFT", "GOOGL", "AMZN", "META", "AVGO", "COST", "JPM"],
+  "watchlist": [
+    "XEG.TO",
+    "ZEO.TO",
+    "BTC-CAD",
+    "XEQT.TO",
+    "VFV.TO",
+    "SPPP.TO",
+    "FINN.NE",
+    "PHYS.TO",
+    "ZNQ.TO",
+    "NVDA",
+    "PSLV.TO",
+    "MU.TO",
+    "COPP.TO",
+    "ZGD.TO",
+    "SSPM.TP",
+    "AMD.TO"
+  ],
+  "unresolved": {
+    "SSPM.TP": "Please confirm the investment name and exchange; no substitute has been made."
+  },
+  "discovery": [
+    "RY.TO",
+    "TD.TO",
+    "ENB.TO",
+    "CNQ.TO",
+    "CNR.TO",
+    "CSU.TO",
+    "SHOP.TO",
+    "AAPL",
+    "MSFT",
+    "GOOGL",
+    "AMZN",
+    "META",
+    "AVGO",
+    "COST",
+    "JPM"
+  ],
   "universe_file": "universe.json",
   "discovery_workers": 3,
   "discovery_min_price": 5,
   "discovery_min_volume20": 50000,
   "discovery_min_turnover20": 1000000,
   "max_new_ideas_daily": 3,
-  "holdings": ["XEG.TO", "ZEO.TO", "BTC-CAD", "XEQT.TO", "VFV.TO", "SPPP.TO", "FINN.NE", "PHYS.TO", "ZNQ.TO", "NVDA", "PSLV.TO", "MU.TO", "COPP.TO", "ZGD.TO", "SSPM.TP", "AMD.TO"],
+  "holdings": [
+    "XEG.TO",
+    "ZEO.TO",
+    "BTC-CAD",
+    "XEQT.TO",
+    "VFV.TO",
+    "SPPP.TO",
+    "FINN.NE",
+    "PHYS.TO",
+    "ZNQ.TO",
+    "NVDA",
+    "PSLV.TO",
+    "MU.TO",
+    "COPP.TO",
+    "ZGD.TO",
+    "SSPM.TP",
+    "AMD.TO"
+  ],
   "benchmark": "XEQT.TO",
   "poll_seconds": 900,
-  "daily_notification": {"timezone": "America/Toronto", "hour": 12, "minute": 0, "window_minutes": 60},
+  "daily_notification": {
+    "timezone": "America/Toronto",
+    "hour": 12,
+    "minute": 0,
+    "window_minutes": 60
+  },
   "news_enabled": true,
   "max_equity_age_days": 4,
   "max_crypto_age_days": 2,
-  "max_buy_atr_pct": 6,
   "unusual_move_pct": 5,
   "unusual_volume_ratio": 2.5,
   "risk_notes": {
@@ -34,5 +90,7 @@
     "COPP.TO": "Verify fund mandate; copper-related exposure is sensitive to industrial demand and commodity cycles.",
     "ZGD.TO": "Gold-mining equities: operating costs, political risk and equity drawdowns as well as gold prices.",
     "AMD.TO": "AMD Canadian listing: confirm instrument; semiconductor competition, earnings and CDR structure."
-  }
+  },
+  "max_buy_extension_pct": 15,
+  "max_buy_annualized_volatility_pct": 60
 }

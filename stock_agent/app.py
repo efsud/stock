@@ -145,57 +145,85 @@ def rsi(closes, periods=14):
     return 50 if gains == losses == 0 else (100 if losses == 0 else 100 - 100/(1+gains/losses))
 
 
-def analyse(data, benchmark, config, now, horizon="SWING"):
+def completed_weeks(data, now):
+    """Friday-week observations, excluding weekends and the unfinished week."""
+    tz = ZoneInfo(data["timezone"])
+    local_today = now.astimezone(tz).date()
+    weeks = {}
+    for bar in data["bars"]:
+        day = datetime.fromtimestamp(bar["t"], UTC).astimezone(tz).date()
+        monday = day - timedelta(days=day.weekday())
+        if day.weekday() < 5 and monday + timedelta(days=5) <= local_today:
+            weeks[monday] = {**bar, "session_date": day.isoformat()}
+    return weeks
+
+
+def analyse(data, benchmark, config, now, horizon="SIX_MONTH"):
+    if horizon not in ("SIX_MONTH", "ONE_YEAR"):
+        raise ValueError("Unknown research horizon")
+    lookback = 26 if horizon == "SIX_MONTH" else 52
+    short_window = lookback // 2
+    weeks = completed_weeks(data, now)
+    keys = sorted(weeks)
+    required = lookback + 4
+    if len(keys) < required:
+        raise ValueError(f"Need {required} completed weeks for {horizon}; found {len(keys)}")
+    if any(b-a != timedelta(days=7) for a, b in zip(keys[-required:-1], keys[-required+1:])):
+        raise ValueError(f"Missing weekly observations in the {horizon} research window")
+    weekly = [weeks[key]["c"] for key in keys]
+    decision_price = weekly[-1]
+    long_average = statistics.mean(weekly[-lookback:])
+    short_average = statistics.mean(weekly[-short_window:])
+    rising = long_average > statistics.mean(weekly[-lookback-4:-4])
+    period_return = (decision_price / weekly[-lookback-1] - 1) * 100
+    returns = [math.log(b/a) for a, b in zip(weekly[-lookback-1:-1], weekly[-lookback:])]
+    volatility = statistics.stdev(returns) * math.sqrt(52) * 100
+    peak, drawdown = weekly[-lookback-1], 0
+    for close in weekly[-lookback:]:
+        peak = max(peak, close)
+        drawdown = min(drawdown, (close/peak-1)*100)
+    relative = None
+    if benchmark:
+        bench_weeks = completed_weeks(benchmark, now)
+        window_keys = keys[-lookback-1:]
+        # Match the exact Friday-week keys; a missing endpoint never shortens
+        # the requested six-month/year comparison into a shorter lookback.
+        if all(key in bench_weeks for key in window_keys):
+            start, end = window_keys[0], window_keys[-1]
+            relative = period_return - (bench_weeks[end]["c"]/bench_weeks[start]["c"]-1)*100
+    checks = (decision_price > long_average, decision_price > short_average,
+              short_average > long_average, rising, period_return > 0,
+              relative is not None and relative > 0)
+    score = sum(checks) * 100 / len(checks)
+    entry = (all(checks) and decision_price/long_average <= 1 + config.get("max_buy_extension_pct", 15)/100
+             and volatility <= config.get("max_buy_annualized_volatility_pct", 60))
+    exit_signal = (decision_price < long_average and short_average < long_average
+                   and not rising and period_return < 0)
     bars = data["bars"]
     c = [b["c"] for b in bars]
     price = c[-1]
-    sma50, sma200 = statistics.mean(c[-50:]), statistics.mean(c[-200:])
-    slope = sma50 > statistics.mean(c[-55:-5])
-    momentum = rsi(c)
+    momentum = rsi(c)  # Report-only diagnostic, never an entry/exit criterion.
     ranges = [max(b["h"]-b["l"], abs(b["h"]-a["c"]), abs(b["l"]-a["c"]))
               for a, b in zip(bars, bars[1:])]
     atr = statistics.mean(ranges[:14])
     for value in ranges[14:]:
         atr = (atr * 13 + value) / 14
     atr_pct = atr / price * 100
-    returns = [math.log(b/a) for a, b in zip(c[-64:], c[-63:])]
-    volatility = statistics.stdev(returns) * math.sqrt(365 if data["crypto"] else 252) * 100
-    # Compare identical endpoint dates, including BTC's 24/7 series, in native currencies.
-    relative = None
-    if benchmark:
-        def dated(series):
-            tz = ZoneInfo(series["timezone"])
-            return {datetime.fromtimestamp(b["t"], UTC).astimezone(tz).date(): b["c"]
-                    for b in series["bars"]}
-        own, bench = dated(data), dated(benchmark)
-        common = sorted(own.keys() & bench.keys())
-        if len(common) >= 64 and common[-1] == max(own):
-            start, end = common[-64], common[-1]
-            relative = (own[end]/own[start] - bench[end]/bench[start]) * 100
-    score = sum((price > sma50, price > sma200, sma50 > sma200, slope,
-                 50 <= momentum <= 70, relative is not None and relative > 0)) * 100 / 6
     asof = datetime.fromtimestamp(bars[-1]["t"], UTC)
     limit = config["max_crypto_age_days" if data["crypto"] else "max_equity_age_days"]
     fresh = timedelta(0) <= now-asof <= timedelta(days=limit)
-    breakout = price > max(c[-21:-1])
-    entry = (breakout and score >= 80 and 50 <= momentum <= 70
-             and atr_pct <= config["max_buy_atr_pct"] and relative is not None)
-    exit_signal = price < sma200 or (price < min(c[-21:-1]) and price < sma50)
-    if horizon == "LONG_TERM":
-        entry = (price > sma200 and sma50 > sma200 and slope and 45 <= momentum <= 65
-                 and price/sma200 <= 1.15 and relative is not None and relative > 0
-                 and atr_pct <= config["max_buy_atr_pct"])
-        exit_signal = price < sma200 and sma50 < sma200
+    if keys[-1] < now.astimezone(ZoneInfo(data["timezone"])).date() - timedelta(days=14):
+        fresh = False
     signal = "DATA_STALE" if not fresh else "BUY_CANDIDATE" if entry else "EXIT_REVIEW" if exit_signal else "WAIT"
-    reasons = [f"Close {'above' if price > sma50 else 'below'} 50-day average",
-               f"Close {'above' if price > sma200 else 'below'} 200-day average",
-               f"RSI(14) {momentum:.1f}; entry window {'45–65' if horizon == 'LONG_TERM' else '50–70'}"]
-    if breakout:
-        reasons.append("Close broke above previous 20 closing prices")
+    reasons = [f"Decision uses {lookback} completed weeks through {weeks[keys[-1]]['session_date']}",
+               f"Weekly close {'above' if decision_price > long_average else 'below'} {lookback}-week average",
+               f"{short_window}-week average {'above' if short_average > long_average else 'below'} {lookback}-week average",
+               f"{lookback}-week average {'rising' if rising else 'flat/falling'} versus four weeks earlier",
+               f"{lookback}-week adjusted return {period_return:+.1f}%; weekly-close maximum drawdown {drawdown:.1f}%"]
     if relative is None:
-        reasons.append("Comparable benchmark data unavailable; buy signals disabled")
+        reasons.append("Full-horizon benchmark data unavailable; buy signals disabled")
     else:
-        reasons.append(f"63 shared-session relative return {relative:+.1f} percentage points vs {config['benchmark']} (native currencies)")
+        reasons.append(f"{lookback}-week relative return {relative:+.1f} percentage points vs {config['benchmark']} (native currencies)")
     if not fresh:
         reasons.append("Data too old; trading signals suppressed")
     risk = "VERY HIGH" if data["crypto"] or volatility >= 60 else "HIGH" if volatility >= 35 else "MODERATE" if volatility >= 20 else "LOWER"
@@ -203,9 +231,11 @@ def analyse(data, benchmark, config, now, horizon="SWING"):
     volume_ratio = bars[-1]["v"] / volume_avg if volume_avg > 0 else 0
     move = (price/c[-2]-1)*100
     event = fresh and (abs(move) >= config["unusual_move_pct"] or volume_ratio >= config["unusual_volume_ratio"])
-    # Return prospective invalidation, not a portfolio stop without an entry price.
     stop = max(0, price - 2 * atr)
     return {"symbol": data["symbol"], "horizon": horizon, "name": data["name"], "currency": data["currency"],
+            "lookback_weeks": lookback, "decision_date": weeks[keys[-1]]["session_date"],
+            "decision_price": weeks[keys[-1]]["raw"], "period_return_pct": round(period_return, 2),
+            "max_weekly_drawdown_pct": round(drawdown, 2),
             "asof": asof.isoformat(), "session_date": asof.astimezone(ZoneInfo(data["timezone"])).date().isoformat(),
             "price_source": "https://finance.yahoo.com/quote/" + quote(data["symbol"], safe=""),
             "price": round(bars[-1]["raw"], 4),
@@ -232,7 +262,7 @@ def message(row):
             f"Illustrative 2-ATR invalidation: {row['illustrative_invalidation']} {row['currency']} (not a guaranteed fill)\n"
             f"Risks: {row['risk_note']}\n"
             f"Price source: {row['price_source']}\n"
-            "Daily-price research only; check news, earnings, spreads, valuation and portfolio overlap before acting.")
+            "6–12 month price-history research; check news, earnings, valuation and portfolio overlap before acting.")
 
 
 class AlertState:
@@ -327,10 +357,10 @@ def daily_summary(rows, errors, max_new=3):
     # limited Telegram space. Rank symbols once across both holding horizons.
     ranked = sorted((r for r in valid if not r["owned"] and r["signal"] == "BUY_CANDIDATE"
                      and r["symbol"] not in conflicts),
-                    key=lambda r: (-r.get("strength", 0), r.get("atr_pct", float("inf")), r["symbol"]))
+                    key=lambda r: (-r.get("strength", 0), r.get("annualized_volatility_pct", float("inf")), r["symbol"]))
     selected = set(list(dict.fromkeys(r["symbol"] for r in ranked))[:max(0, int(max_new))])
     lines = []
-    for horizon, label in (("SWING", "Swing"), ("LONG_TERM", "Long-term")):
+    for horizon, label in (("SIX_MONTH", "6-month"), ("ONE_YEAR", "1-year")):
         candidates = [r for r in valid if r["horizon"] == horizon and r["symbol"] not in conflicts
                       and (r["owned"] or r["symbol"] in selected)]
         buy = sorted({r["symbol"] for r in candidates if r["signal"] == "BUY_CANDIDATE"},
@@ -346,7 +376,7 @@ def daily_summary(rows, errors, max_new=3):
     if not lines:
         lines = ["No buys or sells recommended" + (" from available data." if errors else ".")]
     else:
-        lines.insert(0, "Daily-price signals")
+        lines.insert(0, "6–12 month research signals")
     if conflicts:
         lines.append("Mixed signals: " + ", ".join(sorted(conflicts)) + ".")
     if errors:
@@ -422,7 +452,7 @@ def scan(config, notify=False):
             benchmark = None
     for symbol, data in cache.items():
         try:
-            for horizon in ("SWING", "LONG_TERM"):
+            for horizon in ("SIX_MONTH", "ONE_YEAR"):
                 row = analyse(data, benchmark, config, now, horizon)
                 row["source"] = "watchlist" if symbol in config["watchlist"] else "discovery"
                 row["sector_group"] = sectors.get(symbol, "priority_holdings")
@@ -447,14 +477,14 @@ def scan(config, notify=False):
             except RuntimeError as exc:
                 errors[f"{symbol} news"] = str(exc)
     report = {"generated_at": now.isoformat(), "data_source": "Yahoo Finance unofficial daily chart endpoint",
-              "horizon": "Separate SWING and LONG_TERM daily-close rules; holding period is not predicted",
+              "horizon": "26-week and 52-week research using completed Friday-week closes; daily Telegram delivery",
               "benchmark": config["benchmark"], "coverage": {"requested": len(symbols), "analysed": len(cache), "sector_groups": list(dict.fromkeys(sectors.values()))},
               "results": sorted(rows, key=lambda x: (x["source"] != "watchlist", -x["strength"])), "news": news, "errors": errors}
     folder = ROOT / "reports"
     folder.mkdir(exist_ok=True)
     (folder / "latest.json").write_text(json.dumps(report, indent=2))
     lines = ["# Daily market research", "", f"Generated: {now.isoformat()}", "",
-             "Completed daily prices only. Scores are rule counts, not success probabilities.", "",
+             "Decisions use completed weekly closes over 26 and 52 weeks. Latest daily prices are context only. Scores are rule counts, not success probabilities.", "",
              "| Symbol | Horizon | Close | Signal | Strength | Risk | Volatility |", "|---|---|---:|---|---:|---|---:|"]
     for row in report["results"]:
         lines.append(f"| {row['symbol']} | {row['horizon']} | {row['price']} {row['currency']} | {row['signal']} | {row['strength']}/100 | {row['risk']} | {row['annualized_volatility_pct']}% |")

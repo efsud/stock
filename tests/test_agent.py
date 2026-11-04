@@ -14,9 +14,9 @@ CONFIG = json.loads((Path(__file__).resolve().parents[1] / 'config.json').read_t
 
 def series():
     bars = []
-    for i in range(260):
+    for i in range(420):
         price = 100 + i * .1 + (i % 4) * .3
-        bars.append({'t': int((NOW-timedelta(days=260-i)).timestamp()),
+        bars.append({'t': int((NOW-timedelta(days=420-i)).timestamp()),
                      'o': price, 'h': price+1, 'l': price-1, 'c': price, 'v': 1000, 'raw': price})
     return {'symbol': 'TEST', 'name': 'Test', 'currency': 'CAD', 'crypto': False,
             'timezone': 'America/Toronto', 'bars': bars}
@@ -38,7 +38,7 @@ class SetupTests(unittest.TestCase):
 
 
 class DailySummaryTests(unittest.TestCase):
-    def row(self, symbol, signal, horizon='SWING', owned=True):
+    def row(self, symbol, signal, horizon='SIX_MONTH', owned=True):
         return {'symbol': symbol, 'signal': signal, 'horizon': horizon, 'owned': owned}
 
     def test_no_action_is_one_short_sentence(self):
@@ -47,11 +47,11 @@ class DailySummaryTests(unittest.TestCase):
     def test_action_summary_omits_status_and_unowned_sells(self):
         text = daily_summary([self.row('A', 'BUY_CANDIDATE'), self.row('B', 'EXIT_REVIEW'),
                               self.row('C', 'WAIT'), self.row('D', 'EXIT_REVIEW', owned=False),
-                              self.row('E', 'BUY_CANDIDATE', 'LONG_TERM')], {})
-        self.assertEqual(text, 'Daily-price signals\nSwing: Buy A; Sell B.\nLong-term: Buy E.')
+                              self.row('E', 'BUY_CANDIDATE', 'ONE_YEAR')], {})
+        self.assertEqual(text, '6–12 month research signals\n6-month: Buy A; Sell B.\n1-year: Buy E.')
 
     def test_conflicts_never_recommend_buy_and_sell_same_symbol(self):
-        text = daily_summary([self.row('A', 'BUY_CANDIDATE'), self.row('A', 'EXIT_REVIEW', 'LONG_TERM')], {})
+        text = daily_summary([self.row('A', 'BUY_CANDIDATE'), self.row('A', 'EXIT_REVIEW', 'ONE_YEAR')], {})
         self.assertNotIn('Buy A', text)
         self.assertNotIn('Sell A', text)
         self.assertIn('Mixed signals: A.', text)
@@ -68,7 +68,7 @@ class DailySummaryTests(unittest.TestCase):
 
     def test_same_outside_symbol_uses_only_one_idea_slot(self):
         rows = [dict(self.row('A', 'BUY_CANDIDATE', horizon=h, owned=False), strength=100)
-                for h in ('SWING', 'LONG_TERM')]
+                for h in ('SIX_MONTH', 'ONE_YEAR')]
         rows.append(dict(self.row('B', 'BUY_CANDIDATE', owned=False), strength=90))
         self.assertIn('Buy A, B', daily_summary(rows, {}, max_new=2))
 
@@ -131,6 +131,55 @@ class UniverseTests(unittest.TestCase):
 
 
 class AnalysisTests(unittest.TestCase):
+    def test_incomplete_current_week_cannot_change_long_history_decisions(self):
+        data, benchmark = series(), series()
+        for bar in benchmark['bars']:
+            bar.update(o=100, h=101, l=99, c=100, raw=100)
+        now = NOW + timedelta(days=3)
+        for horizon in ('SIX_MONTH', 'ONE_YEAR'):
+            before = analyse(data, benchmark, CONFIG, now, horizon)
+            changed = copy.deepcopy(data)
+            stamp = int((NOW + timedelta(days=2)).timestamp())
+            changed['bars'].append(dict(t=stamp, o=1, h=2, l=.5, c=1, raw=1, v=1000000))
+            after = analyse(changed, benchmark, CONFIG, now, horizon)
+            for key in ('signal', 'strength', 'period_return_pct', 'max_weekly_drawdown_pct', 'annualized_volatility_pct', 'decision_date'):
+                self.assertEqual(before[key], after[key], key)
+
+    def test_lookbacks_need_full_history_and_measure_different_periods(self):
+        for horizon, weeks in (('SIX_MONTH', 26), ('ONE_YEAR', 52)):
+            result = analyse(series(), series(), CONFIG, NOW, horizon)
+            self.assertEqual(result['lookback_weeks'], weeks)
+        short = series()
+        short['bars'] = short['bars'][-200:]
+        with self.assertRaisesRegex(ValueError, 'completed weeks'):
+            analyse(short, None, CONFIG, NOW, 'ONE_YEAR')
+
+    def test_older_year_history_changes_year_view_without_changing_six_month_view(self):
+        original, revised, benchmark = series(), series(), series()
+        for bar in benchmark['bars']:
+            bar.update(o=100, h=101, l=99, c=100, raw=100)
+        for bar in revised['bars'][:-210]:
+            for field in ('o', 'h', 'l', 'c', 'raw'):
+                bar[field] *= 2
+        short_before = analyse(original, benchmark, CONFIG, NOW, 'SIX_MONTH')
+        short_after = analyse(revised, benchmark, CONFIG, NOW, 'SIX_MONTH')
+        self.assertEqual(short_before['signal'], short_after['signal'])
+        self.assertEqual(short_before['period_return_pct'], short_after['period_return_pct'])
+        year_before = analyse(original, benchmark, CONFIG, NOW, 'ONE_YEAR')
+        year_after = analyse(revised, benchmark, CONFIG, NOW, 'ONE_YEAR')
+        self.assertGreater(year_before['period_return_pct'], 0)
+        self.assertLess(year_after['period_return_pct'], 0)
+        self.assertEqual(year_after['signal'], 'EXIT_REVIEW')
+
+    def test_missing_week_rejects_misleading_shortened_lookback(self):
+        data = series()
+        # Remove a full week inside both requested history windows.
+        day = datetime.fromtimestamp(data['bars'][-100]['t'], timezone.utc).date()
+        monday = day - timedelta(days=day.weekday())
+        data['bars'] = [bar for bar in data['bars'] if not monday <= datetime.fromtimestamp(bar['t'], timezone.utc).date() < monday+timedelta(days=7)]
+        with self.assertRaisesRegex(ValueError, 'Missing weekly'):
+            analyse(data, None, CONFIG, NOW)
+
     def test_news_rejects_old_future_and_unsafe_links(self):
         xml = b'''<rss><channel>
         <item><title>Recent event</title><pubDate>Sun, 01 Nov 2026 20:00:00 GMT</pubDate><link>https://example.com/recent</link></item>
@@ -160,9 +209,9 @@ class AnalysisTests(unittest.TestCase):
         self.assertFalse(result['unusual_activity'])
 
     def test_currency_and_horizon_preserved(self):
-        result = analyse(series(), series(), CONFIG, NOW, 'LONG_TERM')
+        result = analyse(series(), series(), CONFIG, NOW, 'ONE_YEAR')
         self.assertEqual(result['currency'], 'CAD')
-        self.assertEqual(result['horizon'], 'LONG_TERM')
+        self.assertEqual(result['horizon'], 'ONE_YEAR')
         self.assertGreater(result['atr_pct'], 0)
 
     def test_missing_benchmark_never_buy(self):
@@ -173,18 +222,18 @@ class AnalysisTests(unittest.TestCase):
         data, benchmark = series(), series()
         for bar in benchmark['bars']:
             bar.update(o=100, h=101, l=99, c=100, raw=100)
-        for horizon in ['SWING', 'LONG_TERM']:
+        for horizon in ['SIX_MONTH', 'ONE_YEAR']:
             result = analyse(data, benchmark, CONFIG, NOW, horizon)
             self.assertEqual(result['signal'], 'BUY_CANDIDATE')
             self.assertEqual(result['strength'], 100)
-            strict = dict(CONFIG, max_buy_atr_pct=.1)
+            strict = dict(CONFIG, max_buy_annualized_volatility_pct=.1)
             self.assertNotEqual(analyse(data, benchmark, strict, NOW, horizon)['signal'], 'BUY_CANDIDATE')
 
     def test_breakdown_exits_both_horizons(self):
         data = series()
         for bar in data['bars'][-60:]:
             bar.update(o=50, h=51, l=49, c=50, raw=50)
-        for horizon in ['SWING', 'LONG_TERM']:
+        for horizon in ['SIX_MONTH', 'ONE_YEAR']:
             self.assertEqual(analyse(data, series(), CONFIG, NOW, horizon)['signal'], 'EXIT_REVIEW')
 
 
@@ -214,14 +263,14 @@ class AlertTests(unittest.TestCase):
             raise RuntimeError('offline')
         with self.assertRaises(RuntimeError):
             deliver([self.row], {}, self.state, fail)
-        self.assertIsNone(self.state.signal('TEST:SWING'))
+        self.assertIsNone(self.state.signal('TEST:SIX_MONTH'))
         sent = []
         deliver([self.row], {}, self.state, sent.append)
         self.assertEqual(len(sent), 1)
 
     def test_horizons_are_independent(self):
         sent = []
-        other = dict(self.row, horizon='LONG_TERM')
+        other = dict(self.row, horizon='ONE_YEAR')
         deliver([self.row, other], {}, self.state, sent.append)
         self.assertEqual(len(sent), 2)
 
@@ -235,7 +284,7 @@ class AlertTests(unittest.TestCase):
     def test_activity_sent_once_per_bar_across_horizons(self):
         sent = []
         a = dict(self.row, signal='WAIT', unusual_activity=True)
-        b = dict(a, horizon='LONG_TERM')
+        b = dict(a, horizon='ONE_YEAR')
         deliver([a, b], {}, self.state, sent.append)
         deliver([a, b], {}, self.state, sent.append)
         self.assertEqual(len(sent), 1)
